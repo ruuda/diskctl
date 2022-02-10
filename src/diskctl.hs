@@ -127,33 +127,19 @@ catalogCodec = Catalog
   <*> Toml.list partitionCodec  "partition"  .= catalogPartitions
   <*> Toml.list filesystemCodec "filesystem" .= catalogFilesystems
 
-readCatalog :: FilePath -> IO (Either Text Catalog)
-readCatalog fname =
-  let
-    decodeBytes tomlBytes = do
-      tomlText <- case Text.decodeUtf8' tomlBytes of
-        Right txt -> Right txt
-        Left exc ->
-          Left $ mempty
-            <> "Failed to read " <> (Text.pack fname) <> " as UTF-8:\n"
-            <> "  " <> (Text.pack $ show exc)
-
-      case Toml.decode catalogCodec tomlText of
-        Right catalog -> Right catalog
-        Left msgs ->
-          Left $ mempty
-            <> "Failed to parse " <> (Text.pack fname) <> ":\n"
-            <> "  " <> Toml.prettyTomlDecodeErrors msgs
-  in
-    fmap decodeBytes $ ByteString.readFile fname
+readCatalog :: FilePath -> IO Catalog
+readCatalog fname = do
+  Toml.decodeFileExact catalogCodec fname >>= \case
+    Right catalog -> pure catalog
+    Left msgs -> do
+      -- Print errors to stderr, so we can still see them when piping stdout elsewhere.
+      TextIO.hPutStrLn stderr $
+        "Failed to parse " <> (Text.pack fname) <> ":\n"
+        <> "  " <> Toml.prettyTomlDecodeErrors msgs
+      System.exitFailure
 
 main :: IO ()
 main = do
   args <- Environment.getArgs
-  catalog <- readCatalog (head args) >>= \case
-    Right catalog -> pure catalog
-    Left error -> do
-      -- Print errors to stderr, so we can still see them when piping stdout elsewhere.
-      TextIO.hPutStrLn stderr error
-      System.exitFailure
+  catalog <- readCatalog $ head args
   putStrLn $ show catalog
