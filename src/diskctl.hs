@@ -10,6 +10,8 @@
 
 module Main (main) where
 
+import Control.Applicative ((<|>))
+import Data.List (intercalate)
 import Data.Text (Text)
 import Data.Time.Calendar (Day)
 import Data.UUID (UUID)
@@ -45,6 +47,16 @@ data Disk = Disk
   , diskPriceEur     :: Float
   }
 
+instance Show Disk where
+  show d = ""
+    <> "Label:         " <> (Text.unpack $ diskLabel d) <> "\n"
+    <> "Model:         " <> (Text.unpack $ diskModelName d) <> "\n"
+    <> "Serial number: " <> (Text.unpack $ diskSerialNumber d) <> "\n"
+    <> "Purchase date: " <> (show $ diskPurchaseDate d) <> "\n"
+    <> "Wipe date:     " <> (show $ diskWipeDate d) <> "\n"
+    <> "Size:          " <> (show $ diskSizeBytes d) <> " bytes\n"
+    <> "Price:         " <> "€ " <> (show $ diskPriceEur d)
+
 diskCodec :: TomlCodec Disk
 diskCodec = Disk
   <$> Toml.text  "label"         .= diskLabel
@@ -59,7 +71,7 @@ data Partition = Partition
   { partLabel    :: Text
   , partDisk     :: Text
   , partLuksUuid :: Text -- TODO: UUID type
-  }
+  } deriving (Show)
 
 partitionCodec :: TomlCodec Partition
 partitionCodec = Partition
@@ -71,22 +83,22 @@ data Assignment = Assignment
   { asgPartition     :: Text
   , asgInstallDate   :: Day
   , asgUninstallDate :: Maybe Day
-  }
+  } deriving (Show)
 
-maybeCodec :: TomlCodec a -> TomlCodec (Maybe a)
-maybeCodec c = Toml.dimatch id Just c 
+maybeDate :: Toml.Key -> TomlCodec (Maybe Day)
+maybeDate key = (Toml.dimatch id Just (Toml.day key)) <|> (pure Nothing)
 
 assignmentCodec :: TomlCodec Assignment
 assignmentCodec = Assignment
-  <$> Toml.text "partition"    .= asgPartition
-  <*> Toml.day  "install_date" .= asgInstallDate
-  <*> (maybeCodec $ Toml.day "uninstall_date") .= asgUninstallDate
+  <$> Toml.text "partition"      .= asgPartition
+  <*> Toml.day  "install_date"   .= asgInstallDate
+  <*> maybeDate "uninstall_date" .= asgUninstallDate
 
 data Filesystem = Filesystem
   { fsLabel      :: Text
   , fsBtrfsUuid  :: Text -- TODO: UUID
   , fsDisks      :: [Assignment]
-  }
+  } deriving (Show)
 
 filesystemCodec :: TomlCodec Filesystem
 filesystemCodec = Filesystem
@@ -99,6 +111,15 @@ data Catalog = Catalog
   , catalogPartitions  :: [Partition]
   , catalogFilesystems :: [Filesystem]
   }
+
+instance Show Catalog where
+  show c = ""
+    <> "Disks:\n"
+    <> (intercalate "\n\n" $ fmap show $ catalogDisks c) <> "\n\n"
+    <> "Partitions:\n"
+    <> (intercalate "\n" $ fmap show $ catalogPartitions c) <> "\n\n"
+    <> "Filesystems:\n"
+    <> (intercalate "\n" $ fmap show $ catalogFilesystems c)
 
 catalogCodec :: TomlCodec Catalog
 catalogCodec = Catalog
@@ -135,4 +156,4 @@ main = do
       -- Print errors to stderr, so we can still see them when piping stdout elsewhere.
       TextIO.hPutStrLn stderr error
       System.exitFailure
-  putStrLn "the end"
+  putStrLn $ show catalog
