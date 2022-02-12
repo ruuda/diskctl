@@ -10,7 +10,6 @@
 
 module Main (main) where
 
-import Control.Applicative ((<|>))
 import Data.List (intercalate)
 import Data.Text (Text)
 import Data.Time.Calendar (Day)
@@ -19,11 +18,8 @@ import Prelude hiding (lookup)
 import System.IO (stderr)
 import Toml (TomlCodec, (.=))
 
-import qualified Data.ByteString as ByteString
-import qualified Data.ByteString.Lazy as LazyByteString
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.Text as Text
-import qualified Data.Text.Encoding as Text
 import qualified Data.Text.IO as TextIO
 import qualified System.Environment as Environment
 import qualified System.Exit as System
@@ -40,7 +36,7 @@ instance Show Euros where
 eurosCodec :: Toml.Key -> TomlCodec Euros
 eurosCodec key = Toml.dimap
   ((/ 100.0) . fromIntegral . euroCents)
-  (Euros . round . (* 100.0))
+  (fromEuroCents . round . (* 100.0))
   (Toml.float key)
 
 data Disk = Disk
