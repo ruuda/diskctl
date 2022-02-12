@@ -37,6 +37,12 @@ fromEuroCents = Euros
 instance Show Euros where
   show (Euros cents) = "€ " <> (show $ cents `div` 100) <> "." <> (show $ cents `mod` 100)
 
+eurosCodec :: Toml.Key -> TomlCodec Euros
+eurosCodec key = Toml.dimap
+  ((/ 100.0) . fromIntegral . euroCents)
+  (Euros . round . (* 100.0))
+  (Toml.float key)
+
 data Disk = Disk
   { diskLabel        :: Text
   , diskModelName    :: Text
@@ -44,7 +50,7 @@ data Disk = Disk
   , diskPurchaseDate :: Day
   , diskWipeDate     :: Day
   , diskSizeBytes    :: Int
-  , diskPriceEur     :: Float
+  , diskPrice        :: Euros
   }
 
 instance Show Disk where
@@ -55,7 +61,7 @@ instance Show Disk where
     <> "Purchase date: " <> (show $ diskPurchaseDate d) <> "\n"
     <> "Wipe date:     " <> (show $ diskWipeDate d) <> "\n"
     <> "Size:          " <> (show $ diskSizeBytes d) <> " bytes\n"
-    <> "Price:         " <> "€ " <> (show $ diskPriceEur d)
+    <> "Price:         " <> (show $ diskPrice d)
 
 diskCodec :: TomlCodec Disk
 diskCodec = Disk
@@ -65,7 +71,7 @@ diskCodec = Disk
   <*> Toml.day   "purchase_date" .= diskPurchaseDate
   <*> Toml.day   "wipe_date"     .= diskWipeDate
   <*> Toml.int   "size_bytes"    .= diskSizeBytes
-  <*> Toml.float "price_eur"     .= diskPriceEur -- TODO: Wrapper type.
+  <*> eurosCodec "price_eur"     .= diskPrice
 
 data Partition = Partition
   { partLabel    :: Text
@@ -85,14 +91,11 @@ data Assignment = Assignment
   , asgUninstallDate :: Maybe Day
   } deriving (Show)
 
-maybeDate :: Toml.Key -> TomlCodec (Maybe Day)
-maybeDate key = (Toml.dimatch id Just (Toml.day key)) <|> (pure Nothing)
-
 assignmentCodec :: TomlCodec Assignment
 assignmentCodec = Assignment
   <$> Toml.text "partition"      .= asgPartition
   <*> Toml.day  "install_date"   .= asgInstallDate
-  <*> maybeDate "uninstall_date" .= asgUninstallDate
+  <*> Toml.dioptional (Toml.day "uninstall_date") .= asgUninstallDate
 
 data Filesystem = Filesystem
   { fsLabel      :: Text
