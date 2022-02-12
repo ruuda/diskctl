@@ -8,9 +8,12 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Main (main) where
 
+import Control.Monad (forM_)
+import Data.Hashable (Hashable)
 import Data.List (intercalate)
 import Data.Text (Text)
 import Data.Time.Calendar (Day)
@@ -145,8 +148,48 @@ readCatalog fname = do
         <> "  " <> Toml.prettyTomlDecodeErrors msgs
       System.exitFailure
 
+-- Return the elements that occur multiple times in the list.
+nonUnique :: (Hashable a, Eq a) => [a] -> [a]
+nonUnique xs =
+  let
+    counts = HashMap.fromListWith (+) $ fmap (\x -> (x, 1 :: Int)) xs
+  in
+    [x | (x, count) <- HashMap.toList counts, count > 1]
+
+-- Print errors and exit if the catalog contains errors.
+validateCatalog :: Catalog -> IO ()
+validateCatalog catalog =
+  let
+    -- Report any duplicates among xs, returns the number of duplicates.
+    reportDuplicates :: forall a. (Show a, Hashable a, Eq a) => String -> [a] -> IO Int
+    reportDuplicates message xs = case nonUnique xs of
+      []    -> pure 0
+      dupes -> do
+        forM_ dupes $ \x -> putStrLn $ message <> (show x)
+        pure $ length dupes
+
+    partUuids  = fmap partLuksUuid $ catalogPartitions catalog
+    fsUuids    = fmap fsBtrfsUuid $ catalogFilesystems catalog
+    uuids      = partUuids <> fsUuids
+    fsLabels   = fmap fsLabel $ catalogFilesystems catalog
+    partLabels = fmap partLabel $ catalogPartitions catalog
+    diskLabels = fmap diskLabel $ catalogDisks catalog
+  in do
+    -- Report as many errors as we can find at once.
+    numErrors <- sum <$> sequence
+      [ reportDuplicates "Error: Duplicate UUID: " uuids
+      , reportDuplicates "Error: Duplicate filesystem label: " fsLabels
+      , reportDuplicates "Error: Duplicate partition label: " partLabels
+      , reportDuplicates "Error: Duplicate disk label: " diskLabels
+      ]
+    -- If there were any erros at all, abort; validation failed.
+    case numErrors of
+      0 -> pure ()
+      _ -> System.exitFailure
+
 main :: IO ()
 main = do
   args <- Environment.getArgs
   catalog <- readCatalog $ head args
+  validateCatalog catalog
   putStrLn $ show catalog
