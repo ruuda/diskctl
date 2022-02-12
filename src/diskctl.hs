@@ -12,6 +12,7 @@
 
 module Main (main) where
 
+import Options.Applicative ((<**>))
 import Control.Monad (forM_)
 import Data.Hashable (Hashable)
 import Data.List (intercalate)
@@ -22,11 +23,11 @@ import Prelude hiding (lookup)
 import System.IO (stderr)
 import Toml (TomlCodec, (.=))
 
+import qualified Options.Applicative as Opts
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.Text as Text
 import qualified Data.Text.IO as TextIO
 import qualified Data.UUID as UUID
-import qualified System.Environment as Environment
 import qualified System.Exit as System
 import qualified Toml
 
@@ -196,9 +197,42 @@ validateCatalog catalog =
       0 -> pure ()
       _ -> System.exitFailure
 
+data Command
+  = CmdServe
+  | CmdPrint
+
+data MainOptions = MainOptions
+  { mainFile :: FilePath
+  , mainCommand :: Command
+  }
+
+mainParser :: Opts.Parser MainOptions
+mainParser = MainOptions
+  <$> Opts.strOption
+    (  Opts.long "file"
+    <> Opts.short 'f'
+    <> Opts.metavar "<path>"
+    <> Opts.help "The path of the inventory TOML file to load."
+    )
+  <*> Opts.subparser
+    (  Opts.command "serve"
+         (Opts.info (pure CmdServe) (Opts.progDesc "Serve an overview page over http."))
+    <> Opts.command "print"
+         (Opts.info (pure CmdPrint) (Opts.progDesc "Print the parsed version of the inventory."))
+    )
+
 main :: IO ()
-main = do
-  args <- Environment.getArgs
-  catalog <- readCatalog $ head args
-  validateCatalog catalog
-  putStrLn $ show catalog
+main =
+  let
+    optsDesc = Opts.info (mainParser <**> Opts.helper)
+      (  Opts.fullDesc
+      <> Opts.progDesc "Inspect disk inventory."
+      <> Opts.header "diskctl -- Inspect disk inventory."
+      )
+  in do
+    mainOpts <- Opts.execParser optsDesc
+    catalog <- readCatalog $ mainFile mainOpts
+    validateCatalog catalog
+    case mainCommand mainOpts of
+      CmdPrint -> putStrLn $ show catalog
+      CmdServe -> putStrLn "not implemented"

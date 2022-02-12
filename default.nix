@@ -2,11 +2,15 @@ let
   pkgs = import ./nixpkgs-pinned.nix {};
 
   ghc = pkgs.haskellPackages.ghcWithPackages (p: [
+    p.blaze
+    p.blaze-html
+    p.optparse-applicative
     p.text
     p.time
     p.tomland
     p.unordered-containers
     p.uuid
+    p.warp
   ]);
 in
   pkgs.buildEnv {
