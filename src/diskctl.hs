@@ -56,6 +56,7 @@ data Disk = Disk
   , diskSerialNumber :: Text
   , diskPurchaseDate :: Day
   , diskWipeDate     :: Day
+  , diskWipeSeconds  :: Maybe Int
   , diskSizeBytes    :: Int
   , diskPrice        :: Euros
   }
@@ -67,6 +68,11 @@ instance Show Disk where
     <> "Serial number: " <> (Text.unpack $ diskSerialNumber d) <> "\n"
     <> "Purchase date: " <> (show $ diskPurchaseDate d) <> "\n"
     <> "Wipe date:     " <> (show $ diskWipeDate d) <> "\n"
+    <> "Wipe time:     " <>
+    ( case diskWipeSeconds d of
+        Just seconds -> show seconds <> " seconds\n"
+        Nothing      -> "unknown\n"
+    )
     <> "Size:          " <> (show $ diskSizeBytes d) <> " bytes\n"
     <> "Price:         " <> (show $ diskPrice d)
 
@@ -77,6 +83,7 @@ diskCodec = Disk
   <*> Toml.text  "serial_number" .= diskSerialNumber
   <*> Toml.day   "purchase_date" .= diskPurchaseDate
   <*> Toml.day   "wipe_date"     .= diskWipeDate
+  <*> Toml.dioptional (Toml.int "wipe_seconds") .= diskWipeSeconds
   <*> Toml.int   "size_bytes"    .= diskSizeBytes
   <*> eurosCodec "price_eur"     .= diskPrice
 
