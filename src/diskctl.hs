@@ -168,12 +168,13 @@ validateCatalog catalog =
         forM_ dupes $ \x -> putStrLn $ message <> (show x)
         pure $ length dupes
 
-    partUuids  = fmap partLuksUuid $ catalogPartitions catalog
-    fsUuids    = fmap fsBtrfsUuid $ catalogFilesystems catalog
-    uuids      = partUuids <> fsUuids
-    fsLabels   = fmap fsLabel $ catalogFilesystems catalog
-    partLabels = fmap partLabel $ catalogPartitions catalog
-    diskLabels = fmap diskLabel $ catalogDisks catalog
+    partUuids   = fmap partLuksUuid $ catalogPartitions catalog
+    fsUuids     = fmap fsBtrfsUuid $ catalogFilesystems catalog
+    uuids       = partUuids <> fsUuids
+    fsLabels    = fmap fsLabel $ catalogFilesystems catalog
+    partLabels  = fmap partLabel $ catalogPartitions catalog
+    diskLabels  = fmap diskLabel $ catalogDisks catalog
+    diskSerials = fmap diskSerialNumber $ catalogDisks catalog
   in do
     -- Report as many errors as we can find at once.
     numErrors <- sum <$> sequence
@@ -181,6 +182,7 @@ validateCatalog catalog =
       , reportDuplicates "Error: Duplicate filesystem label: " fsLabels
       , reportDuplicates "Error: Duplicate partition label: " partLabels
       , reportDuplicates "Error: Duplicate disk label: " diskLabels
+      , reportDuplicates "Error: Duplicate disk serial number: " diskSerials
       ]
     -- If there were any erros at all, abort; validation failed.
     case numErrors of
