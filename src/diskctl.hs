@@ -5,8 +5,9 @@
 -- you may not use this file except in compliance with the License.
 -- A copy of the License has been included in the root of the repository.
 
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NumericUnderscores #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Main (main) where
 
@@ -21,6 +22,7 @@ import Toml (TomlCodec, (.=))
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.Text as Text
 import qualified Data.Text.IO as TextIO
+import qualified Data.UUID as UUID
 import qualified System.Environment as Environment
 import qualified System.Exit as System
 import qualified Toml
@@ -31,6 +33,7 @@ fromEuroCents :: Int -> Euros
 fromEuroCents = Euros
 
 instance Show Euros where
+  -- TODO: Needs padding, use a string formatting library.
   show (Euros cents) = "€ " <> (show $ cents `div` 100) <> "." <> (show $ cents `mod` 100)
 
 eurosCodec :: Toml.Key -> TomlCodec Euros
@@ -38,6 +41,11 @@ eurosCodec key = Toml.dimap
   ((/ 100.0) . fromIntegral . euroCents)
   (fromEuroCents . round . (* 100.0))
   (Toml.float key)
+
+uuidCodec :: Toml.Key -> TomlCodec UUID
+uuidCodec = Toml.textBy UUID.toText $ \t -> case UUID.fromText t of
+  Nothing   -> Left $ "Invalid UUID: " <> t
+  Just uuid -> Right uuid
 
 data Disk = Disk
   { diskLabel        :: Text
@@ -72,14 +80,14 @@ diskCodec = Disk
 data Partition = Partition
   { partLabel    :: Text
   , partDisk     :: Text
-  , partLuksUuid :: Text -- TODO: UUID type
+  , partLuksUuid :: UUID
   } deriving (Show)
 
 partitionCodec :: TomlCodec Partition
 partitionCodec = Partition
-  <$> Toml.text  "label"     .= partLabel
-  <*> Toml.text  "disk"      .= partDisk
-  <*> Toml.text  "luks_uuid" .= partLuksUuid
+  <$> Toml.text "label"     .= partLabel
+  <*> Toml.text "disk"      .= partDisk
+  <*> uuidCodec "luks_uuid" .= partLuksUuid
 
 data Assignment = Assignment
   { asgPartition     :: Text
@@ -95,14 +103,14 @@ assignmentCodec = Assignment
 
 data Filesystem = Filesystem
   { fsLabel      :: Text
-  , fsBtrfsUuid  :: Text -- TODO: UUID
+  , fsBtrfsUuid  :: UUID
   , fsDisks      :: [Assignment]
   } deriving (Show)
 
 filesystemCodec :: TomlCodec Filesystem
 filesystemCodec = Filesystem
   <$> Toml.text                 "label"      .= fsLabel
-  <*> Toml.text                 "btrfs_uuid" .= fsBtrfsUuid
+  <*> uuidCodec                 "btrfs_uuid" .= fsBtrfsUuid
   <*> Toml.list assignmentCodec "disks"      .= fsDisks
 
 data Catalog = Catalog
