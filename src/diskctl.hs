@@ -88,45 +88,45 @@ diskCodec = Disk
   <*> Toml.int   "size_bytes"    .= diskSizeBytes
   <*> eurosCodec "price_eur"     .= diskPrice
 
-data Partition = Partition
-  { partLabel    :: Text
-  , partDisk     :: Text
-  , partLuksUuid :: UUID
+data Volume = Volume
+  { volumeLabel    :: Text
+  , volumeDisk     :: Text
+  , volumeLuksUuid :: UUID
   } deriving (Show)
 
-partitionCodec :: TomlCodec Partition
-partitionCodec = Partition
-  <$> Toml.text "label"     .= partLabel
-  <*> Toml.text "disk"      .= partDisk
-  <*> uuidCodec "luks_uuid" .= partLuksUuid
+volumeCodec :: TomlCodec Volume
+volumeCodec = Volume
+  <$> Toml.text "label"     .= volumeLabel
+  <*> Toml.text "disk"      .= volumeDisk
+  <*> uuidCodec "luks_uuid" .= volumeLuksUuid
 
 data Assignment = Assignment
-  { asgPartition     :: Text
+  { asgVolume        :: Text
   , asgInstallDate   :: Day
   , asgUninstallDate :: Maybe Day
   } deriving (Show)
 
 assignmentCodec :: TomlCodec Assignment
 assignmentCodec = Assignment
-  <$> Toml.text "partition"      .= asgPartition
-  <*> Toml.day  "install_date"   .= asgInstallDate
+  <$> Toml.text "volume"       .= asgVolume
+  <*> Toml.day  "install_date" .= asgInstallDate
   <*> Toml.dioptional (Toml.day "uninstall_date") .= asgUninstallDate
 
 data Filesystem = Filesystem
   { fsLabel      :: Text
   , fsBtrfsUuid  :: UUID
-  , fsDisks      :: [Assignment]
+  , fsVolumes    :: [Assignment]
   } deriving (Show)
 
 filesystemCodec :: TomlCodec Filesystem
 filesystemCodec = Filesystem
   <$> Toml.text                 "label"      .= fsLabel
   <*> uuidCodec                 "btrfs_uuid" .= fsBtrfsUuid
-  <*> Toml.list assignmentCodec "disks"      .= fsDisks
+  <*> Toml.list assignmentCodec "volumes"    .= fsVolumes
 
 data Catalog = Catalog
   { catalogDisks       :: [Disk]
-  , catalogPartitions  :: [Partition]
+  , catalogVolumes     :: [Volume]
   , catalogFilesystems :: [Filesystem]
   }
 
@@ -134,15 +134,15 @@ instance Show Catalog where
   show c = ""
     <> "Disks:\n"
     <> (intercalate "\n\n" $ fmap show $ catalogDisks c) <> "\n\n"
-    <> "Partitions:\n"
-    <> (intercalate "\n" $ fmap show $ catalogPartitions c) <> "\n\n"
+    <> "Volumes:\n"
+    <> (intercalate "\n" $ fmap show $ catalogVolumes c) <> "\n\n"
     <> "Filesystems:\n"
     <> (intercalate "\n" $ fmap show $ catalogFilesystems c)
 
 catalogCodec :: TomlCodec Catalog
 catalogCodec = Catalog
   <$> Toml.list diskCodec       "disk"       .= catalogDisks
-  <*> Toml.list partitionCodec  "partition"  .= catalogPartitions
+  <*> Toml.list volumeCodec     "volume"     .= catalogVolumes
   <*> Toml.list filesystemCodec "filesystem" .= catalogFilesystems
 
 readCatalog :: FilePath -> IO Catalog
@@ -176,19 +176,19 @@ validateCatalog catalog =
         forM_ dupes $ \x -> putStrLn $ message <> (show x)
         pure $ length dupes
 
-    partUuids   = fmap partLuksUuid $ catalogPartitions catalog
-    fsUuids     = fmap fsBtrfsUuid $ catalogFilesystems catalog
-    uuids       = partUuids <> fsUuids
-    fsLabels    = fmap fsLabel $ catalogFilesystems catalog
-    partLabels  = fmap partLabel $ catalogPartitions catalog
-    diskLabels  = fmap diskLabel $ catalogDisks catalog
-    diskSerials = fmap diskSerialNumber $ catalogDisks catalog
+    volumeUuids  = fmap volumeLuksUuid $ catalogVolumes catalog
+    fsUuids      = fmap fsBtrfsUuid $ catalogFilesystems catalog
+    uuids        = volumeUuids <> fsUuids
+    fsLabels     = fmap fsLabel $ catalogFilesystems catalog
+    volumeLabels = fmap volumeLabel $ catalogVolumes catalog
+    diskLabels   = fmap diskLabel $ catalogDisks catalog
+    diskSerials  = fmap diskSerialNumber $ catalogDisks catalog
   in do
     -- Report as many errors as we can find at once.
     numErrors <- sum <$> sequence
       [ reportDuplicates "Error: Duplicate UUID: " uuids
       , reportDuplicates "Error: Duplicate filesystem label: " fsLabels
-      , reportDuplicates "Error: Duplicate partition label: " partLabels
+      , reportDuplicates "Error: Duplicate volume label: " volumeLabels
       , reportDuplicates "Error: Duplicate disk label: " diskLabels
       , reportDuplicates "Error: Duplicate disk serial number: " diskSerials
       ]
