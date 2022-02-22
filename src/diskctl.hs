@@ -15,7 +15,7 @@ module Main (main) where
 import Options.Applicative ((<**>))
 import Control.Monad (forM_)
 import Data.Hashable (Hashable)
-import Data.List (intercalate)
+import Data.List (intercalate, intersperse)
 import Data.Text (Text)
 import Data.Time.Calendar (Day)
 import Data.UUID (UUID)
@@ -79,8 +79,7 @@ instance Show Disk where
 
 instance AsDisplayTree Disk where
   asDisplayTree d =
-    [ Node "label"         (diskLabel d) []
-    , Node "model name"    (diskModelName d) []
+    [ Node "model name"    (diskModelName d) []
     , Node "serial number" (diskSerialNumber d) []
     , Node "purchase date" (Text.pack $ show $ diskPurchaseDate d) []
     , Node "wipe date"     (Text.pack $ show $ diskWipeDate d) []
@@ -213,36 +212,77 @@ validateCatalog catalog =
       0 -> pure ()
       _ -> System.exitFailure
 
+-- TODO: Add validation for these references so we know the `head` does not fail.
+getVolume :: Text -> Catalog -> Volume
+getVolume label = head . filter (\v -> volumeLabel v == label) . catalogVolumes
+
+-- TODO: Add validation for these references so we know the `head` does not fail.
+getDisk :: Text -> Catalog -> Disk
+getDisk label = head . filter (\d -> diskLabel d == label) . catalogDisks
+
 -- Data structure to help rendering nested key-value pairs as a tree. A node has
 -- a key, a value, and possibly children.
-data DisplayNode = Node Text Text [DisplayNode]
+data DisplayNode = Node Text Text [DisplayNode] | Spacer
 
 maxKeyWidth :: [DisplayNode] -> Int
 maxKeyWidth nodes = case nodes of
   [] -> 0
   (Node k _ children) : more -> maximum
-    [ Text.length k
+    -- The colon takes one space as well.
+    [ 1 + Text.length k
     -- 3 places for the "├─ "
     , 3 + maxKeyWidth children
     , maxKeyWidth more
     ]
+  Spacer : more -> maxKeyWidth more
 
 renderTree :: [DisplayNode] -> [Text]
 renderTree nodes = renderWidth (maxKeyWidth nodes) nodes
   where
+    renderKey w k v = case v of
+      "" -> k
+      _  -> Text.justifyLeft w ' ' $ k <> ":"
     renderWidth w = \case
       [] ->
         []
       (Node k v children) : [] ->
-        ["└─ " <> (Text.justifyLeft w ' ' $ k <> ":") <> "  " <> v] <>
+        ["└─ " <> (renderKey w k v) <> "  " <> v] <>
         (fmap ("   " <>) $ renderWidth (w - 3) children)
       (Node k v children) : more ->
-        ["├─ " <> (Text.justifyLeft w ' ' $ k <> ":") <> "  " <> v] <>
+        ["├─ " <> (renderKey w k v) <> "  " <> v] <>
         (fmap ("│  " <>) $ renderWidth (w - 3) children) <>
+        (if null children then [] else ["│  "]) <>
         (renderWidth w more)
+      Spacer : [] -> []
+      Spacer : more -> "│" : renderWidth w more
 
 class AsDisplayTree a where
   asDisplayTree :: a -> [DisplayNode]
+
+displayFilesystemAsTree :: Catalog -> Filesystem -> [Text]
+displayFilesystemAsTree catalog fs =
+  let
+    assignmentNode asg =
+      let
+        volume = getVolume (asgVolume asg) catalog
+        disk = getDisk (volumeDisk volume) catalog
+      in
+        Node "volume" (asgVolume asg) $
+          [ Node "luks uuid" (Text.pack $ show $ volumeLuksUuid volume) []
+          , Node "installed" (Text.pack $ show $ asgInstallDate asg) [] ] <>
+          -- If the disk is no longer installed, we don't show its full details.
+          -- If it is still installed, we show the disk here.
+          case asgUninstallDate asg of
+            Just date ->
+              [ Node "uninstalled" (Text.pack $ show date) []
+              , Node "disk" (volumeDisk volume) []
+              ]
+            Nothing -> [Node "disk" (volumeDisk volume) (asDisplayTree disk)]
+    fsNodes =
+      [ Node "btrfs uuid" (Text.pack $ show $ fsBtrfsUuid fs) []
+      ] <> (fmap assignmentNode $ fsVolumes fs)
+  in
+    (" ● " <> fsLabel fs) : (fmap ("   " <>) $ renderTree fsNodes)
 
 data Command
   = CmdServe
@@ -281,9 +321,12 @@ main =
     catalog <- readCatalog $ mainFile mainOpts
     validateCatalog catalog
     case mainCommand mainOpts of
-      CmdPrint -> do
-        forM_ (catalogDisks catalog) $ \disk ->
-          TextIO.putStrLn $ Text.intercalate "\n" $ renderTree $ asDisplayTree disk
-        putStrLn "---"
-        putStrLn $ show catalog
+      CmdPrint ->
+        let
+          fsLines fs = displayFilesystemAsTree catalog fs
+          allFsLines = intersperse [""] (fmap fsLines $ catalogFilesystems catalog)
+        in do
+          TextIO.putStrLn $ Text.intercalate "\n" (concat allFsLines)
+          putStrLn "---"
+          putStrLn $ show catalog
       CmdServe -> putStrLn "not implemented"
