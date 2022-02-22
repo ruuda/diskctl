@@ -77,6 +77,22 @@ instance Show Disk where
     <> "Size:          " <> (show $ diskSizeBytes d) <> " bytes\n"
     <> "Price:         " <> (show $ diskPrice d)
 
+instance AsDisplayTree Disk where
+  asDisplayTree d =
+    [ Node "label"         (diskLabel d) []
+    , Node "model name"    (diskModelName d) []
+    , Node "serial number" (diskSerialNumber d) []
+    , Node "purchase date" (Text.pack $ show $ diskPurchaseDate d) []
+    , Node "wipe date"     (Text.pack $ show $ diskWipeDate d) []
+    , Node "wipe time"
+        (case diskWipeSeconds d of
+          Just seconds -> (Text.pack $ show seconds) <> " seconds"
+          Nothing      -> "unknown"
+        ) []
+    , Node "size" ((Text.pack $ show $ diskSizeBytes d) <> " bytes") []
+    , Node "price" (Text.pack $ show $ diskPrice d) []
+    ]
+
 diskCodec :: TomlCodec Disk
 diskCodec = Disk
   <$> Toml.text  "label"         .= diskLabel
@@ -197,6 +213,37 @@ validateCatalog catalog =
       0 -> pure ()
       _ -> System.exitFailure
 
+-- Data structure to help rendering nested key-value pairs as a tree. A node has
+-- a key, a value, and possibly children.
+data DisplayNode = Node Text Text [DisplayNode]
+
+maxKeyWidth :: [DisplayNode] -> Int
+maxKeyWidth nodes = case nodes of
+  [] -> 0
+  (Node k _ children) : more -> maximum
+    [ Text.length k
+    -- 3 places for the "├─ "
+    , 3 + maxKeyWidth children
+    , maxKeyWidth more
+    ]
+
+renderTree :: [DisplayNode] -> [Text]
+renderTree nodes = renderWidth (maxKeyWidth nodes) nodes
+  where
+    renderWidth w = \case
+      [] ->
+        []
+      (Node k v children) : [] ->
+        ["└─ " <> (Text.justifyLeft w ' ' $ k <> ":") <> "  " <> v] <>
+        (fmap ("   " <>) $ renderWidth (w - 3) children)
+      (Node k v children) : more ->
+        ["├─ " <> (Text.justifyLeft w ' ' $ k <> ":") <> "  " <> v] <>
+        (fmap ("│  " <>) $ renderWidth (w - 3) children) <>
+        (renderWidth w more)
+
+class AsDisplayTree a where
+  asDisplayTree :: a -> [DisplayNode]
+
 data Command
   = CmdServe
   | CmdPrint
@@ -234,5 +281,9 @@ main =
     catalog <- readCatalog $ mainFile mainOpts
     validateCatalog catalog
     case mainCommand mainOpts of
-      CmdPrint -> putStrLn $ show catalog
+      CmdPrint -> do
+        forM_ (catalogDisks catalog) $ \disk ->
+          TextIO.putStrLn $ Text.intercalate "\n" $ renderTree $ asDisplayTree disk
+        putStrLn "---"
+        putStrLn $ show catalog
       CmdServe -> putStrLn "not implemented"
