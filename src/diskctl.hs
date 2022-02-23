@@ -284,9 +284,18 @@ displayFilesystemAsTree catalog fs =
   in
     (" ● " <> fsLabel fs) : (fmap ("   " <>) $ renderTree fsNodes)
 
+displayDiskAsTree :: Catalog -> Disk -> [Text]
+displayDiskAsTree catalog disk =
+  let
+    diskNodes = asDisplayTree disk
+  in
+    (" ● " <> diskLabel disk) : (fmap ("   " <>) $ renderTree diskNodes)
+
 data Command
   = CmdServe
-  | CmdPrint
+  | CmdFilesystem
+  | CmdDisk
+  | CmdDebug
 
 data MainOptions = MainOptions
   { mainFile :: FilePath
@@ -299,13 +308,19 @@ mainParser = MainOptions
     (  Opts.long "file"
     <> Opts.short 'f'
     <> Opts.metavar "<path>"
-    <> Opts.help "The path of the inventory TOML file to load."
+    <> Opts.help "The path of the inventory TOML file to load"
     )
   <*> Opts.subparser
     (  Opts.command "serve"
-         (Opts.info (pure CmdServe) (Opts.progDesc "Serve an overview page over http."))
-    <> Opts.command "print"
-         (Opts.info (pure CmdPrint) (Opts.progDesc "Print the parsed version of the inventory."))
+         (Opts.info (pure CmdServe)      (Opts.progDesc "Serve an overview page over http"))
+    <> Opts.command "filesystem"
+         (Opts.info (pure CmdFilesystem) (Opts.progDesc "Print all filesystems"))
+    <> Opts.command "fs"
+         (Opts.info (pure CmdFilesystem) (Opts.progDesc "Alias for 'filesystem'"))
+    <> Opts.command "disk"
+         (Opts.info (pure CmdDisk)       (Opts.progDesc "Print all disks"))
+    <> Opts.command "debug"
+         (Opts.info (pure CmdDebug)      (Opts.progDesc "Debug-print the catalog"))
     )
 
 main :: IO ()
@@ -314,19 +329,33 @@ main =
     optsDesc = Opts.info (mainParser <**> Opts.helper)
       (  Opts.fullDesc
       <> Opts.progDesc "Inspect disk inventory."
-      <> Opts.header "diskctl -- Inspect disk inventory."
+      <> Opts.header "diskctl -- Inspect disk inventory"
       )
+
+    printTreesWithBlankLine :: [[Text]] -> IO ()
+    printTreesWithBlankLine groups
+      = TextIO.putStrLn
+      $ Text.intercalate "\n"
+      $ concat
+      $ intersperse [""] groups
+
   in do
     mainOpts <- Opts.execParser optsDesc
     catalog <- readCatalog $ mainFile mainOpts
     validateCatalog catalog
     case mainCommand mainOpts of
-      CmdPrint ->
-        let
-          fsLines fs = displayFilesystemAsTree catalog fs
-          allFsLines = intersperse [""] (fmap fsLines $ catalogFilesystems catalog)
-        in do
-          TextIO.putStrLn $ Text.intercalate "\n" (concat allFsLines)
-          putStrLn "---"
-          putStrLn $ show catalog
-      CmdServe -> putStrLn "not implemented"
+      CmdServe ->
+        putStrLn "not implemented"
+
+      CmdFilesystem ->
+        printTreesWithBlankLine $ fmap
+          (displayFilesystemAsTree catalog)
+          (catalogFilesystems catalog)
+
+      CmdDisk ->
+        printTreesWithBlankLine $ fmap
+          (displayDiskAsTree catalog)
+          (catalogDisks catalog)
+
+      CmdDebug ->
+        putStrLn $ show catalog
