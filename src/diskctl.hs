@@ -17,6 +17,8 @@ import Control.Monad (forM_)
 import Data.Hashable (Hashable)
 import Data.List (intercalate, intersperse)
 import Data.Text (Text)
+import Data.Text.Format.Params (Params)
+import Data.Text.Buildable (Buildable (build))
 import Data.Time.Calendar (Day)
 import Data.UUID (UUID)
 import Prelude hiding (lookup)
@@ -26,19 +28,24 @@ import Toml (TomlCodec, (.=))
 import qualified Options.Applicative as Opts
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.Text as Text
+import qualified Data.Text.Format as Format
 import qualified Data.Text.IO as TextIO
+import qualified Data.Text.Lazy as LazyText
 import qualified Data.UUID as UUID
 import qualified System.Exit as System
 import qualified Toml
 
-newtype Euros = Euros { euroCents :: Int }
+newtype Euros = Euros { euroCents :: Int } deriving Show
 
 fromEuroCents :: Int -> Euros
 fromEuroCents = Euros
 
-instance Show Euros where
-  -- TODO: Needs padding, use a string formatting library.
-  show (Euros cents) = "€ " <> (show $ cents `div` 100) <> "." <> (show $ cents `mod` 100)
+format :: Params ps => Format.Format -> ps -> Text
+format f ps = LazyText.toStrict $ Format.format f ps
+
+instance Buildable Euros where
+  build (Euros cents) = Format.build
+    "€ {}.{}" (cents `div` 100, Format.left 2 '0' $ cents `mod` 100)
 
 eurosCodec :: Toml.Key -> TomlCodec Euros
 eurosCodec key = Toml.dimap
@@ -60,22 +67,14 @@ data Disk = Disk
   , diskWipeSeconds  :: Maybe Int
   , diskSizeBytes    :: Int
   , diskPrice        :: Euros
-  }
+  } deriving (Show)
 
-instance Show Disk where
-  show d = ""
-    <> "Label:         " <> (Text.unpack $ diskLabel d) <> "\n"
-    <> "Model:         " <> (Text.unpack $ diskModelName d) <> "\n"
-    <> "Serial number: " <> (Text.unpack $ diskSerialNumber d) <> "\n"
-    <> "Purchase date: " <> (show $ diskPurchaseDate d) <> "\n"
-    <> "Wipe date:     " <> (show $ diskWipeDate d) <> "\n"
-    <> "Wipe time:     " <>
-    ( case diskWipeSeconds d of
-        Just seconds -> show seconds <> " seconds\n"
-        Nothing      -> "unknown\n"
-    )
-    <> "Size:          " <> (show $ diskSizeBytes d) <> " bytes\n"
-    <> "Price:         " <> (show $ diskPrice d)
+pricePerTb :: Disk -> Euros
+pricePerTb disk =
+   fromEuroCents $
+     1_000_000_000_000
+     * (euroCents $ diskPrice disk)
+     `div` (diskSizeBytes disk)
 
 instance AsDisplayTree Disk where
   asDisplayTree d =
@@ -89,7 +88,7 @@ instance AsDisplayTree Disk where
           Nothing      -> "unknown"
         ) []
     , Node "size" ((Text.pack $ show $ diskSizeBytes d) <> " bytes") []
-    , Node "price" (Text.pack $ show $ diskPrice d) []
+    , Node "price" (format "{}, {}/TB" (diskPrice d, pricePerTb d)) []
     ]
 
 diskCodec :: TomlCodec Disk

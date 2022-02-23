@@ -6,6 +6,7 @@ let
     p.blaze-html
     p.optparse-applicative
     p.text
+    p.text-format
     p.time
     p.tomland
     p.unordered-containers
