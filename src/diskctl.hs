@@ -207,11 +207,12 @@ readCatalog fname = do
 
 -- Return the elements that occur multiple times in the list.
 nonUnique :: (Hashable a, Eq a) => [a] -> [a]
-nonUnique xs =
-  let
-    counts = HashMap.fromListWith (+) $ fmap (\x -> (x, 1 :: Int)) xs
-  in
-    [x | (x, count) <- HashMap.toList counts, count > 1]
+nonUnique = id
+  . fmap fst
+  . filter (\(_, count) -> count > 1)
+  . HashMap.toList
+  . HashMap.fromListWith (+)
+  . fmap (\x -> (x, 1 :: Int))
 
 -- Print errors and exit if the catalog contains errors.
 validateCatalog :: Catalog -> IO ()
