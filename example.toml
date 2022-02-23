@@ -1,0 +1,21 @@
+[[disk]]
+label         = "2021-11a"
+model_name    = "Devnull Systems X10"
+serial_number = "7a4a0065"
+purchase_date = 2021-11-03
+wipe_date     = 2021-11-14
+wipe_seconds  = 253957
+size_bytes    = 12000138625024
+price_eur     = 199.99
+
+[[volume]]
+label     = "pool-a"
+disk      = "2021-11a"
+luks_uuid = "5456959a-e303-4c55-8827-bac709be7cff"
+
+[[filesystem]]
+label      = "pool"
+btrfs_uuid = "1767978f-14ee-40cb-98b9-f936858dd12f"
+volumes    = [
+  { volume = "pool-a", install_date = 2021-11-21 },
+]
