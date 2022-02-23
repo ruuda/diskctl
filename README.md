@@ -1,14 +1,14 @@
 # Diskctl
 
-Diskctl is an domain-specific inventory management for tracking disks in btrfs
-file systems. It is useful when your storage needs escalated from one external
-disk, to the point where you have several disks lying on your desk and you
-realize “Hmm, which one was which again? Maybe I should have labeled them.”
+Diskctl is an domain-specific inventory management system for tracking disks in
+btrfs file systems. It is useful when your storage needs have escalated from one
+external disk, to the point where you have several disks lying on your desk and
+you realize “Hmm, which one was which again? Maybe I should have labeled them.”
 
 With Diskctl you track your disks, LUKS volumes, and btrfs file systems, in a
-TOML file. This file acts as a crude inventory database. Diskctl can check it
-for consistency, and display derived properties, such as the price per terabyte,
-or wipe speed in MB/s.
+TOML file. This file acts as a crude inventory database that can be kept under
+source control. Diskctl can check it for consistency, and display derived
+properties, such as the price per terabyte, or wipe speed in MB/s.
 
 Diskctl is a bespoke utility that is aimed at my very particular setup. In its
 current form it is probably not useful to anybody else, but perhaps it can form
@@ -18,6 +18,7 @@ the rationale behind it at some point, but the gist of it is:
  * There are btrfs file systems.
  * Each file system consists of multiple LUKS volumes in RAID1.
  * Each LUKS volume sits directly atop a disk (no partition table).
+ * Before creating the LUKS volume, I wipe the disk with random bytes.
 
 ## Example
 
@@ -51,7 +52,6 @@ We can show the filesystem like so:
 
 ```console
 $ diskctl --file example.toml filesystem
-ghc -Wall src/diskctl.hs
  ● pool
    ├─ btrfs uuid:           1767978f-14ee-40cb-98b9-f936858dd12f
    └─ volume:               pool-a
