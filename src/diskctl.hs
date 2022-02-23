@@ -19,6 +19,7 @@ import Data.List (intercalate, intersperse)
 import Data.Text (Text)
 import Data.Text.Format.Params (Params)
 import Data.Text.Buildable (Buildable (build))
+import Data.Text.Lazy.Builder (Builder)
 import Data.Time.Calendar (Day)
 import Data.UUID (UUID)
 import Prelude hiding (lookup)
@@ -35,13 +36,13 @@ import qualified Data.UUID as UUID
 import qualified System.Exit as System
 import qualified Toml
 
+format :: Params ps => Format.Format -> ps -> Text
+format f ps = LazyText.toStrict $ Format.format f ps
+
 newtype Euros = Euros { euroCents :: Int } deriving Show
 
 fromEuroCents :: Int -> Euros
 fromEuroCents = Euros
-
-format :: Params ps => Format.Format -> ps -> Text
-format f ps = LazyText.toStrict $ Format.format f ps
 
 instance Buildable Euros where
   build (Euros cents) = Format.build
@@ -52,6 +53,40 @@ eurosCodec key = Toml.dimap
   ((/ 100.0) . fromIntegral . euroCents)
   (fromEuroCents . round . (* 100.0))
   (Toml.float key)
+
+newtype Duration = Duration { seconds :: Int } deriving Show
+
+fromSeconds :: Int -> Duration
+fromSeconds = Duration
+
+instance Buildable Duration where
+  build (Duration secs) = case secs of
+    s | s < 60    -> Format.build "{}s"                                                                       (Format.Only s)
+    s | s < 3600  -> Format.build "{}m:{}s"                                                           (s `div` 60, s `mod` 60)
+    s | s < 86400 -> Format.build "{}h:{}m:{}s"                               (s `div` 3600, s `mod` 3600 `div` 60, s `mod` 60)
+    s             -> Format.build "{}d:{}h:{}m:{}s" (s `div` 86400, s `mod` 86400 `div` 3600, s `mod` 3600 `div` 60, s `mod` 60)
+
+formatByteSize :: Int -> Builder
+formatByteSize sz = case sz of
+  _ | sz <     1_000 -> Format.build "{} bytes" (Format.Only sz)
+
+  _ | sz <    10_000 -> Format.build "{} kB" (Format.Only $ Format.fixed 3 $ fromIntegral sz / 1e3)
+  _ | sz <   100_000 -> Format.build "{} kB" (Format.Only $ Format.fixed 2 $ fromIntegral sz / 1e3)
+  _ | sz < 1_000_000 -> Format.build "{} kB" (Format.Only $ Format.fixed 1 $ fromIntegral sz / 1e3)
+
+  _ | sz <    10_000_000 -> Format.build "{} MB" (Format.Only $ Format.fixed 3 $ fromIntegral sz / 1e6)
+  _ | sz <   100_000_000 -> Format.build "{} MB" (Format.Only $ Format.fixed 2 $ fromIntegral sz / 1e6)
+  _ | sz < 1_000_000_000 -> Format.build "{} MB" (Format.Only $ Format.fixed 1 $ fromIntegral sz / 1e6)
+
+  _ | sz <    10_000_000_000 -> Format.build "{} GB" (Format.Only $ Format.fixed 3 $ fromIntegral sz / 1e9)
+  _ | sz <   100_000_000_000 -> Format.build "{} GB" (Format.Only $ Format.fixed 2 $ fromIntegral sz / 1e9)
+  _ | sz < 1_000_000_000_000 -> Format.build "{} GB" (Format.Only $ Format.fixed 1 $ fromIntegral sz / 1e9)
+
+  _ | sz <    10_000_000_000_000 -> Format.build "{} TB" (Format.Only $ Format.fixed 3 $ fromIntegral sz / 1e12)
+  _ | sz <   100_000_000_000_000 -> Format.build "{} TB" (Format.Only $ Format.fixed 2 $ fromIntegral sz / 1e12)
+  _ | sz < 1_000_000_000_000_000 -> Format.build "{} TB" (Format.Only $ Format.fixed 1 $ fromIntegral sz / 1e12)
+
+  _ -> Format.build "{} PB" (Format.Only $ Format.fixed 3 $ fromIntegral sz / 1e15)
 
 uuidCodec :: Toml.Key -> TomlCodec UUID
 uuidCodec = Toml.textBy UUID.toText $ \t -> case UUID.fromText t of
@@ -80,15 +115,15 @@ instance AsDisplayTree Disk where
   asDisplayTree d =
     [ Node "model name"    (diskModelName d) []
     , Node "serial number" (diskSerialNumber d) []
+    , Node "size"          (format "{}, {} bytes" (formatByteSize $ diskSizeBytes d, diskSizeBytes d)) []
+    , Node "price"         (format "{}, {}/TB" (diskPrice d, pricePerTb d)) []
     , Node "purchase date" (Text.pack $ show $ diskPurchaseDate d) []
     , Node "wipe date"     (Text.pack $ show $ diskWipeDate d) []
     , Node "wipe time"
         (case diskWipeSeconds d of
-          Just seconds -> (Text.pack $ show seconds) <> " seconds"
+          Just seconds -> format "{}, {}/s" (fromSeconds seconds, formatByteSize $ diskSizeBytes d `div` seconds)
           Nothing      -> "unknown"
         ) []
-    , Node "size" ((Text.pack $ show $ diskSizeBytes d) <> " bytes") []
-    , Node "price" (format "{}, {}/TB" (diskPrice d, pricePerTb d)) []
     ]
 
 diskCodec :: TomlCodec Disk
