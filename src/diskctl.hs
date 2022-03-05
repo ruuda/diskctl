@@ -12,17 +12,18 @@
 
 module Main (main) where
 
-import Options.Applicative ((<**>))
 import Control.Monad (forM, forM_)
+import Data.HashMap.Strict (HashMap)
 import Data.Hashable (Hashable)
 import Data.List (intercalate, intersperse)
+import Data.Maybe (isNothing)
 import Data.Text (Text)
-import Data.Text.Format.Params (Params)
 import Data.Text.Buildable (Buildable (build))
+import Data.Text.Format.Params (Params)
 import Data.Text.Lazy.Builder (Builder)
 import Data.Time.Calendar (Day)
-import Data.HashMap.Strict (HashMap)
 import Data.UUID (UUID)
+import Options.Applicative ((<**>))
 import Prelude hiding (lookup)
 import System.IO (hPutStrLn, stderr)
 import Toml (TomlCodec, (.=))
@@ -56,7 +57,7 @@ eurosCodec key = Toml.dimap
   (fromEuroCents . round . (* 100.0))
   (Toml.float key)
 
-newtype Duration = Duration { seconds :: Int } deriving Show
+newtype Duration = Duration { durationSeconds :: Int } deriving Show
 
 fromSeconds :: Int -> Duration
 fromSeconds = Duration
@@ -211,10 +212,12 @@ readCatalog fname = do
 -- cross-checked by `validateCatalog`, such that lookups do not fail. (E.g. if a
 -- volume references a disk by label, that disk does exist.)
 data ValidCatalog = ValidCatalog
-  { validCatalog     :: Catalog
-  , validDisks       :: HashMap Text Disk
-  , validVolumes     :: HashMap Text Volume
-  , validFilesystems :: HashMap Text Filesystem
+  { validCatalog               :: Catalog
+  , validDisks                 :: HashMap Text Disk
+  , validVolumes               :: HashMap Text Volume
+  , validFilesystems           :: HashMap Text Filesystem
+    -- For every disk by id, the volumes that use it.
+  , validDiskVolumes           :: HashMap Text [Assignment]
   }
 
 -- Return the elements that occur multiple times in the list.
@@ -227,7 +230,7 @@ nonUnique = id
   . fmap (\x -> (x, 1 :: Int))
 
 -- Print errors and exit if the catalog contains errors.
-validateCatalog :: Catalog -> IO ()
+validateCatalog :: Catalog -> IO ValidCatalog
 validateCatalog catalog =
   let
     -- Report any duplicates among xs, returns the number of duplicates.
@@ -267,11 +270,45 @@ validateCatalog catalog =
     diskLabels   = fmap diskLabel $ catalogDisks catalog
     diskSerials  = fmap diskSerialNumber $ catalogDisks catalog
 
-    validated = ValidCatalog
+    validated0 = ValidCatalog
       { validCatalog     = catalog
       , validDisks       = indexOn diskLabel $ catalogDisks catalog
       , validVolumes     = indexOn volumeLabel $ catalogVolumes catalog
       , validFilesystems = indexOn fsLabel $ catalogFilesystems catalog
+      , validDiskVolumes = HashMap.empty
+      }
+
+    -- For every disk, find all assignments that it was ever used in.
+    diskVolumes = HashMap.fromListWith (<>) $ fmap
+      (\asg ->
+        let
+          volume = getVolume (asgVolume asg) validated0
+          disk = getDisk (volumeDisk volume) validated0
+        in
+          (diskLabel disk, [asg])
+      )
+      (concatMap fsVolumes $ catalogFilesystems catalog)
+
+    reportMultipleAssignments :: IO Int
+    reportMultipleAssignments = fmap sum $ forM (HashMap.toList diskVolumes) $
+      \(disk, asgs) -> case (filter (isNothing . asgUninstallDate)) asgs of
+        []       -> pure 0
+        asg : [] -> pure 0
+        _        -> do
+          TextIO.hPutStrLn stderr $ format "Error: Disk \"{}\" is used simultaneously in multiple filesystems through these volumes:" [disk]
+          forM_ asgs $ \asg ->
+            TextIO.hPutStrLn stderr $ format " - {}, installed {}" (asgVolume asg, asgInstallDate asg)
+          pure 1
+
+    validated1 = validated0
+      { validDiskVolumes = HashMap.fromListWith (<>) $
+          fmap (\asg ->
+            let
+              volume = getVolume (asgVolume asg) validated0
+              disk = getDisk (volumeDisk volume) validated0
+            in
+              (diskLabel disk, [asg])
+          ) (concatMap fsVolumes $ catalogFilesystems catalog)
       }
   in do
     -- Report as many errors as we can find at once.
@@ -283,23 +320,26 @@ validateCatalog catalog =
       , reportDuplicates "Error: Duplicate disk serial number: " diskSerials
       , reportBrokenReferences volumeLabel (pure . volumeDisk)
           "Error: Volume \"{}\" references non-existing disk: {}"
-          (catalogVolumes catalog) (validDisks validated)
+          (catalogVolumes catalog) (validDisks validated0)
       , reportBrokenReferences fsLabel (fmap asgVolume . fsVolumes)
           "Error: Filesystem \"{}\" references non-existing volume: {}"
-          (catalogFilesystems catalog) (validVolumes validated)
+          (catalogFilesystems catalog) (validVolumes validated0)
+      , reportMultipleAssignments
       ]
     -- If there were any erros at all, abort; validation failed.
     case numErrors of
-      0 -> pure ()
+      0 -> pure validated1
       _ -> System.exitFailure
 
--- TODO: Add validation for these references so we know the `head` does not fail.
-getVolume :: Text -> Catalog -> Volume
-getVolume label = head . filter (\v -> volumeLabel v == label) . catalogVolumes
+getVolume :: Text -> ValidCatalog -> Volume
+getVolume label catalog = case HashMap.lookup label $ validVolumes catalog of
+  Just v  -> v
+  Nothing -> error "Impossible, we validated all references."
 
--- TODO: Add validation for these references so we know the `head` does not fail.
-getDisk :: Text -> Catalog -> Disk
-getDisk label = head . filter (\d -> diskLabel d == label) . catalogDisks
+getDisk :: Text -> ValidCatalog -> Disk
+getDisk label catalog = case HashMap.lookup label $ validDisks catalog of
+  Just d  -> d
+  Nothing -> error "Impossible, we validated all references."
 
 -- Data structure to help rendering nested key-value pairs as a tree. A node has
 -- a key, a value, and possibly children.
@@ -340,7 +380,7 @@ renderTree nodes = renderWidth (maxKeyWidth nodes) nodes
 class AsDisplayTree a where
   asDisplayTree :: a -> [DisplayNode]
 
-displayFilesystemAsTree :: Catalog -> Filesystem -> [Text]
+displayFilesystemAsTree :: ValidCatalog -> Filesystem -> [Text]
 displayFilesystemAsTree catalog fs =
   let
     assignmentNode asg =
@@ -365,7 +405,7 @@ displayFilesystemAsTree catalog fs =
   in
     (" ● " <> fsLabel fs) : (fmap ("   " <>) $ renderTree fsNodes)
 
-displayDiskAsTree :: Catalog -> Disk -> [Text]
+displayDiskAsTree :: ValidCatalog -> Disk -> [Text]
 displayDiskAsTree catalog disk =
   let
     diskNodes = asDisplayTree disk
@@ -421,9 +461,9 @@ main =
       $ intersperse [""] groups
 
   in do
-    mainOpts <- Opts.execParser optsDesc
-    catalog <- readCatalog $ mainFile mainOpts
-    validateCatalog catalog
+    mainOpts   <- Opts.execParser optsDesc
+    catalogRaw <- readCatalog $ mainFile mainOpts
+    catalog    <- validateCatalog catalogRaw
     case mainCommand mainOpts of
       CmdServe ->
         putStrLn "not implemented"
@@ -431,12 +471,12 @@ main =
       CmdFilesystem ->
         printTreesWithBlankLine $ fmap
           (displayFilesystemAsTree catalog)
-          (catalogFilesystems catalog)
+          (catalogFilesystems $ validCatalog $ catalog)
 
       CmdDisk ->
         printTreesWithBlankLine $ fmap
           (displayDiskAsTree catalog)
-          (catalogDisks catalog)
+          (catalogDisks $ validCatalog $ catalog)
 
       CmdDebug ->
-        putStrLn $ show catalog
+        putStrLn $ show $ validCatalog $ catalog
