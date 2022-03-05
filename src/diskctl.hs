@@ -280,7 +280,9 @@ validateCatalog catalog =
       }
 
     -- For every disk, find all assignments that it was ever used in.
-    diskVolumes = HashMap.fromListWith (<>) $ concatMap
+    -- Flip the append so we preserve assignments in the order that they are
+    -- listed.
+    diskVolumes = HashMap.fromListWith (flip (<>)) $ concatMap
       (\fs -> fmap
         (\asg ->
           let
@@ -348,6 +350,18 @@ getDisk :: Text -> ValidCatalog -> Disk
 getDisk label catalog = case HashMap.lookup label $ validDisks catalog of
   Just d  -> d
   Nothing -> error "Impossible, we validated all references."
+
+-- Get the file systems and volume that a disk is or was used in, by disk label.
+getDiskVolumes :: Text -> ValidCatalog -> [(Filesystem, Assignment)]
+getDiskVolumes label catalog = case HashMap.lookup label $ validDiskVolumes catalog of
+  Just asgs -> asgs
+  Nothing   -> []
+
+-- Get the current file system and volume that a disk is used in, by disk label.
+getCurrentVolume :: Text -> ValidCatalog -> Maybe (Filesystem, Assignment)
+getCurrentVolume label catalog = case HashMap.lookup label $ validDiskCurrentVolume catalog of
+  Just asg -> asg
+  Nothing  -> Nothing
 
 -- Data structure to help rendering nested key-value pairs as a tree. A node has
 -- a key, a value, and possibly children.
@@ -417,8 +431,21 @@ displayDiskAsTree :: ValidCatalog -> Disk -> [Text]
 displayDiskAsTree catalog disk =
   let
     diskNodes = asDisplayTree disk
+    usageNode (fs, asg) = Node "usage" "" $
+      [ Node "volume" (asgVolume asg) []
+      , Node "filesystem" (fsLabel fs) []
+      , Node "installed" (Text.pack $ show $ asgInstallDate asg) []
+      ] <> (
+        case asgUninstallDate asg of
+          Just date -> [ Node "uninstalled" (Text.pack $ show date) [] ]
+          Nothing   -> []
+      )
+    diskUsageNodes =
+      case getDiskVolumes (diskLabel disk) catalog of
+        []   -> [Node "usage" "disk has never been installed" []]
+        asgs -> fmap usageNode asgs
   in
-    (" ● " <> diskLabel disk) : (fmap ("   " <>) $ renderTree diskNodes)
+    (" ● " <> diskLabel disk) : (fmap ("   " <>) $ renderTree (diskNodes <> diskUsageNodes))
 
 data Command
   = CmdServe
