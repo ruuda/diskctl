@@ -217,7 +217,8 @@ data ValidCatalog = ValidCatalog
   , validVolumes               :: HashMap Text Volume
   , validFilesystems           :: HashMap Text Filesystem
     -- For every disk by id, the volumes that use it.
-  , validDiskVolumes           :: HashMap Text [Assignment]
+  , validDiskVolumes           :: HashMap Text [(Filesystem, Assignment)]
+  , validDiskCurrentVolume     :: HashMap Text (Maybe (Filesystem, Assignment))
   }
 
 -- Return the elements that occur multiple times in the list.
@@ -279,36 +280,43 @@ validateCatalog catalog =
       }
 
     -- For every disk, find all assignments that it was ever used in.
-    diskVolumes = HashMap.fromListWith (<>) $ fmap
-      (\asg ->
-        let
-          volume = getVolume (asgVolume asg) validated0
-          disk = getDisk (volumeDisk volume) validated0
-        in
-          (diskLabel disk, [asg])
+    diskVolumes = HashMap.fromListWith (<>) $ concatMap
+      (\fs -> fmap
+        (\asg ->
+          let
+            volume = getVolume (asgVolume asg) validated0
+            disk = getDisk (volumeDisk volume) validated0
+          in
+            (diskLabel disk, [(fs, asg)])
+        )
+        (fsVolumes fs)
       )
-      (concatMap fsVolumes $ catalogFilesystems catalog)
+      (catalogFilesystems catalog)
 
     reportMultipleAssignments :: IO Int
     reportMultipleAssignments = fmap sum $ forM (HashMap.toList diskVolumes) $
-      \(disk, asgs) -> case (filter (isNothing . asgUninstallDate)) asgs of
+      \(disk, asgs) -> case (filter (isNothing . asgUninstallDate . snd)) asgs of
         []       -> pure 0
         asg : [] -> pure 0
         _        -> do
-          TextIO.hPutStrLn stderr $ format "Error: Disk \"{}\" is used simultaneously in multiple filesystems through these volumes:" [disk]
-          forM_ asgs $ \asg ->
-            TextIO.hPutStrLn stderr $ format " - {}, installed {}" (asgVolume asg, asgInstallDate asg)
+          TextIO.hPutStrLn stderr $ format "Error: Disk \"{}\" is used simultaneously in multiple filesystems:" [disk]
+          forM_ asgs $ \(fs, asg) ->
+            TextIO.hPutStrLn stderr $ format
+              " - Filesystem \"{}\" through volume \"{}\", installed {}"
+              (fsLabel fs, asgVolume asg, asgInstallDate asg)
           pure 1
 
+    diskCurrentVolume = fmap
+      (\asgs -> case (filter (isNothing . asgUninstallDate . snd)) asgs of
+        []       -> Nothing
+        asg : [] -> Just asg
+        _        -> error "We should have checked for multiple assignments."
+      )
+      diskVolumes
+
     validated1 = validated0
-      { validDiskVolumes = HashMap.fromListWith (<>) $
-          fmap (\asg ->
-            let
-              volume = getVolume (asgVolume asg) validated0
-              disk = getDisk (volumeDisk volume) validated0
-            in
-              (diskLabel disk, [asg])
-          ) (concatMap fsVolumes $ catalogFilesystems catalog)
+      { validDiskVolumes = diskVolumes
+      , validDiskCurrentVolume = diskCurrentVolume
       }
   in do
     -- Report as many errors as we can find at once.
