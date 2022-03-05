@@ -13,7 +13,7 @@
 module Main (main) where
 
 import Options.Applicative ((<**>))
-import Control.Monad (forM_)
+import Control.Monad (forM, forM_)
 import Data.Hashable (Hashable)
 import Data.List (intercalate, intersperse)
 import Data.Text (Text)
@@ -21,12 +21,14 @@ import Data.Text.Format.Params (Params)
 import Data.Text.Buildable (Buildable (build))
 import Data.Text.Lazy.Builder (Builder)
 import Data.Time.Calendar (Day)
+import Data.HashMap.Strict (HashMap)
 import Data.UUID (UUID)
 import Prelude hiding (lookup)
-import System.IO (stderr)
+import System.IO (hPutStrLn, stderr)
 import Toml (TomlCodec, (.=))
 
 import qualified Options.Applicative as Opts
+import qualified Data.HashMap.Strict as HashMap
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.Text as Text
 import qualified Data.Text.Format as Format
@@ -86,7 +88,7 @@ formatByteSize sz = case sz of
   _ | sz <   100_000_000_000_000 -> Format.build "{} TB" (Format.Only $ Format.fixed 2 $ fromIntegral sz / 1e12)
   _ | sz < 1_000_000_000_000_000 -> Format.build "{} TB" (Format.Only $ Format.fixed 1 $ fromIntegral sz / 1e12)
 
-  _ -> Format.build "{} PB" (Format.Only $ Format.fixed 3 $ fromIntegral sz / 1e15)
+  _ -> Format.build "{} PB" (Format.Only $ Format.fixed 3 $ fromIntegral sz / (1e15 :: Double))
 
 uuidCodec :: Toml.Key -> TomlCodec UUID
 uuidCodec = Toml.textBy UUID.toText $ \t -> case UUID.fromText t of
@@ -205,6 +207,16 @@ readCatalog fname = do
         <> "  " <> Toml.prettyTomlDecodeErrors msgs
       System.exitFailure
 
+-- Catalog with an index on disk, volume, and filesystemd id. Ids have been
+-- cross-checked by `validateCatalog`, such that lookups do not fail. (E.g. if a
+-- volume references a disk by label, that disk does exist.)
+data ValidCatalog = ValidCatalog
+  { validCatalog     :: Catalog
+  , validDisks       :: HashMap Text Disk
+  , validVolumes     :: HashMap Text Volume
+  , validFilesystems :: HashMap Text Filesystem
+  }
+
 -- Return the elements that occur multiple times in the list.
 nonUnique :: (Hashable a, Eq a) => [a] -> [a]
 nonUnique = id
@@ -223,8 +235,29 @@ validateCatalog catalog =
     reportDuplicates message xs = case nonUnique xs of
       []    -> pure 0
       dupes -> do
-        forM_ dupes $ \x -> putStrLn $ message <> (show x)
+        forM_ dupes $ \x -> hPutStrLn stderr $ message <> (show x)
         pure $ length dupes
+
+    -- Try a lookup of each reference produced by `getRefs` in `referenced`, if
+    -- that fails, print an error to stderr.
+    reportBrokenReferences
+      :: (a -> Text)
+      -> (a -> [Text])
+      -> Format.Format
+      -> [a]
+      -> HashMap Text v
+      -> IO Int
+    reportBrokenReferences getName getRefs message xs referenced
+      = fmap sum $ forM xs $ \x ->
+          fmap sum $ forM (getRefs x) $ \ref ->
+            case HashMap.lookup ref referenced of
+              Just _  -> pure (0 :: Int)
+              Nothing -> do
+                TextIO.hPutStrLn stderr $ format message (getName x, ref)
+                pure 1
+
+    indexOn :: forall k v. (Hashable k, Eq k) => (v -> k) -> [v] -> HashMap k v
+    indexOn key = HashMap.fromList . fmap (\x -> (key x, x))
 
     volumeUuids  = fmap volumeLuksUuid $ catalogVolumes catalog
     fsUuids      = fmap fsBtrfsUuid $ catalogFilesystems catalog
@@ -233,6 +266,13 @@ validateCatalog catalog =
     volumeLabels = fmap volumeLabel $ catalogVolumes catalog
     diskLabels   = fmap diskLabel $ catalogDisks catalog
     diskSerials  = fmap diskSerialNumber $ catalogDisks catalog
+
+    validated = ValidCatalog
+      { validCatalog     = catalog
+      , validDisks       = indexOn diskLabel $ catalogDisks catalog
+      , validVolumes     = indexOn volumeLabel $ catalogVolumes catalog
+      , validFilesystems = indexOn fsLabel $ catalogFilesystems catalog
+      }
   in do
     -- Report as many errors as we can find at once.
     numErrors <- sum <$> sequence
@@ -241,6 +281,12 @@ validateCatalog catalog =
       , reportDuplicates "Error: Duplicate volume label: " volumeLabels
       , reportDuplicates "Error: Duplicate disk label: " diskLabels
       , reportDuplicates "Error: Duplicate disk serial number: " diskSerials
+      , reportBrokenReferences volumeLabel (pure . volumeDisk)
+          "Error: Volume \"{}\" references non-existing disk: {}"
+          (catalogVolumes catalog) (validDisks validated)
+      , reportBrokenReferences fsLabel (fmap asgVolume . fsVolumes)
+          "Error: Filesystem \"{}\" references non-existing volume: {}"
+          (catalogFilesystems catalog) (validVolumes validated)
       ]
     -- If there were any erros at all, abort; validation failed.
     case numErrors of
