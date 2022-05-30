@@ -30,7 +30,6 @@ import Toml (TomlCodec, (.=))
 
 import qualified Options.Applicative as Opts
 import qualified Data.HashMap.Strict as HashMap
-import qualified Data.HashMap.Strict as HashMap
 import qualified Data.Text as Text
 import qualified Data.Text.Format as Format
 import qualified Data.Text.IO as TextIO
@@ -405,6 +404,18 @@ class AsDisplayTree a where
 displayFilesystemAsTree :: ValidCatalog -> Filesystem -> [Text]
 displayFilesystemAsTree catalog fs =
   let
+    -- Get the size of a non-uninstalled disk.
+    effectiveSizeBytesAssignment asg =
+      let
+        volume = getVolume (asgVolume asg) catalog
+        disk = getDisk (volumeDisk volume) catalog
+      in
+        case asgUninstallDate asg of
+          Just _  -> 0
+          Nothing -> diskSizeBytes disk
+
+    effectiveSizeBytes = sum $ fmap effectiveSizeBytesAssignment $ fsVolumes fs
+
     assignmentNode asg =
       let
         volume = getVolume (asgVolume asg) catalog
@@ -423,6 +434,7 @@ displayFilesystemAsTree catalog fs =
             Nothing -> [Node "disk" (volumeDisk volume) (asDisplayTree disk)]
     fsNodes =
       [ Node "btrfs uuid" (Text.pack $ show $ fsBtrfsUuid fs) []
+      , Node "size" (format "{}, {} bytes" (formatByteSize $ effectiveSizeBytes, effectiveSizeBytes)) []
       ] <> (fmap assignmentNode $ fsVolumes fs)
   in
     (" ● " <> fsLabel fs) : (fmap ("   " <>) $ renderTree fsNodes)
