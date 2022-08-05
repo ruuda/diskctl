@@ -5,6 +5,7 @@
 -- you may not use this file except in compliance with the License.
 -- A copy of the License has been included in the root of the repository.
 
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -16,7 +17,7 @@ import Control.Monad (forM, forM_)
 import Data.HashMap.Strict (HashMap)
 import Data.Hashable (Hashable)
 import Data.List (intercalate, intersperse)
-import Data.Maybe (isNothing)
+import Data.Maybe (isNothing, mapMaybe)
 import Data.Text (Text)
 import Data.Text.Buildable (Buildable (build))
 import Data.Text.Format.Params (Params)
@@ -41,7 +42,7 @@ import qualified Toml
 format :: Params ps => Format.Format -> ps -> Text
 format f ps = LazyText.toStrict $ Format.format f ps
 
-newtype Euros = Euros { euroCents :: Int } deriving Show
+newtype Euros = Euros { euroCents :: Int } deriving (Num, Show)
 
 fromEuroCents :: Int -> Euros
 fromEuroCents = Euros
@@ -106,19 +107,22 @@ data Disk = Disk
   , diskPrice        :: Euros
   } deriving (Show)
 
-pricePerTb :: Disk -> Euros
-pricePerTb disk =
-   fromEuroCents $
-     1_000_000_000_000
-     * (euroCents $ diskPrice disk)
-     `div` (diskSizeBytes disk)
+pricePerTb :: Euros -> Int -> Euros
+pricePerTb totalPrice sizeInBytes =
+ fromEuroCents $
+   1_000_000_000_000
+   * (euroCents totalPrice)
+   `div` sizeInBytes
+
+diskPricePerTb :: Disk -> Euros
+diskPricePerTb disk = pricePerTb (diskPrice disk) (diskSizeBytes disk)
 
 instance AsDisplayTree Disk where
   asDisplayTree d =
     [ Node "model name"    (diskModelName d) []
     , Node "serial number" (diskSerialNumber d) []
     , Node "size"          (format "{}, {} bytes" (formatByteSize $ diskSizeBytes d, diskSizeBytes d)) []
-    , Node "price"         (format "{}, {}/TB" (diskPrice d, pricePerTb d)) []
+    , Node "price"         (format "{}, {}/TB" (diskPrice d, diskPricePerTb d)) []
     , Node "purchase date" (Text.pack $ show $ diskPurchaseDate d) []
     , Node "wipe date"     (Text.pack $ show $ diskWipeDate d) []
     , Node "wipe time"
@@ -404,17 +408,19 @@ class AsDisplayTree a where
 displayFilesystemAsTree :: ValidCatalog -> Filesystem -> [Text]
 displayFilesystemAsTree catalog fs =
   let
-    -- Get the size of a non-uninstalled disk.
-    effectiveSizeBytesAssignment asg =
+    -- Apply the getter to an installed (non-uninstalled) disk.
+    getEffective :: (Disk -> a) -> Assignment -> Maybe a
+    getEffective get asg =
       let
         volume = getVolume (asgVolume asg) catalog
         disk = getDisk (volumeDisk volume) catalog
       in
         case asgUninstallDate asg of
-          Just _  -> 0
-          Nothing -> diskSizeBytes disk
+          Just _  -> Nothing
+          Nothing -> Just $ get disk
 
-    effectiveSizeBytes = sum $ fmap effectiveSizeBytesAssignment $ fsVolumes fs
+    effectiveSizeBytes = sum $ mapMaybe (getEffective diskSizeBytes) $ fsVolumes fs
+    effectivePrice = sum $ mapMaybe (getEffective diskPrice) $ fsVolumes fs
 
     assignmentNode asg =
       let
@@ -435,6 +441,7 @@ displayFilesystemAsTree catalog fs =
     fsNodes =
       [ Node "btrfs uuid" (Text.pack $ show $ fsBtrfsUuid fs) []
       , Node "size" (format "{}, {} bytes" (formatByteSize $ effectiveSizeBytes, effectiveSizeBytes)) []
+      , Node "price" (format "{}, {}/TB" (effectivePrice, pricePerTb effectivePrice effectiveSizeBytes)) []
       ] <> (fmap assignmentNode $ fsVolumes fs)
   in
     (" ● " <> fsLabel fs) : (fmap ("   " <>) $ renderTree fsNodes)
