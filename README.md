@@ -54,6 +54,8 @@ We can show the filesystem like so:
 $ diskctl --file example.toml filesystem
  ● pool
    ├─ btrfs uuid:           1767978f-14ee-40cb-98b9-f936858dd12f
+   ├─ size:                 12.00 TB, 12000138625024 bytes
+   ├─ price:                € 199.99, € 16.66/TB
    └─ volume:               pool-a
       ├─ luks uuid:         5456959a-e303-4c55-8827-bac709be7cff
       ├─ installed:         2021-11-21
