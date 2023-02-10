@@ -405,8 +405,8 @@ renderTree nodes = renderWidth (maxKeyWidth nodes) nodes
 class AsDisplayTree a where
   asDisplayTree :: a -> [DisplayNode]
 
-displayFilesystemAsTree :: ValidCatalog -> Filesystem -> [Text]
-displayFilesystemAsTree catalog fs =
+displayFilesystemAsTree :: Verbosity -> ValidCatalog -> Filesystem -> [Text]
+displayFilesystemAsTree verbosity catalog fs =
   let
     -- Apply the getter to an installed (non-uninstalled) disk.
     getEffective :: (Disk -> a) -> Assignment -> Maybe a
@@ -442,9 +442,12 @@ displayFilesystemAsTree catalog fs =
       [ Node "btrfs uuid" (Text.pack $ show $ fsBtrfsUuid fs) []
       , Node "size" (format "{}, {} bytes" (formatByteSize $ effectiveSizeBytes, effectiveSizeBytes)) []
       , Node "price" (format "{}, {}/TB" (effectivePrice, pricePerTb effectivePrice effectiveSizeBytes)) []
-      ] <> (fmap assignmentNode $ fsVolumes fs)
+      ]
+    allNodes = case verbosity of
+      VerbosityBrief  -> fsNodes
+      VerbosityNormal -> fsNodes <> (fmap assignmentNode $ fsVolumes fs)
   in
-    (" ● " <> fsLabel fs) : (fmap ("   " <>) $ renderTree fsNodes)
+    (" ● " <> fsLabel fs) : (fmap ("   " <>) $ renderTree allNodes)
 
 displayDiskAsTree :: ValidCatalog -> Disk -> [Text]
 displayDiskAsTree catalog disk =
@@ -466,9 +469,13 @@ displayDiskAsTree catalog disk =
   in
     (" ● " <> diskLabel disk) : (fmap ("   " <>) $ renderTree (diskNodes <> diskUsageNodes))
 
+data Verbosity
+  = VerbosityBrief
+  | VerbosityNormal
+
 data Command
   = CmdServe
-  | CmdFilesystem
+  | CmdFilesystem Verbosity
   | CmdDisk
   | CmdDebug
 
@@ -476,6 +483,13 @@ data MainOptions = MainOptions
   { mainFile :: FilePath
   , mainCommand :: Command
   }
+
+fsParser :: Opts.Parser Command
+fsParser = CmdFilesystem
+  <$> Opts.flag VerbosityNormal VerbosityBrief
+    (  Opts.long "brief"
+    <> Opts.help "Output only the filesystem summary, no volumes or disks."
+    )
 
 mainParser :: Opts.Parser MainOptions
 mainParser = MainOptions
@@ -486,16 +500,26 @@ mainParser = MainOptions
     <> Opts.help "The path of the inventory TOML file to load"
     )
   <*> Opts.subparser
-    (  Opts.command "serve"
-         (Opts.info (pure CmdServe)      (Opts.progDesc "Serve an overview page over http"))
-    <> Opts.command "filesystem"
-         (Opts.info (pure CmdFilesystem) (Opts.progDesc "Print all filesystems"))
-    <> Opts.command "fs"
-         (Opts.info (pure CmdFilesystem) (Opts.progDesc "Alias for 'filesystem'"))
-    <> Opts.command "disk"
-         (Opts.info (pure CmdDisk)       (Opts.progDesc "Print all disks"))
-    <> Opts.command "debug"
-         (Opts.info (pure CmdDebug)      (Opts.progDesc "Debug-print the catalog"))
+    (  Opts.command "serve" (Opts.info
+         (pure CmdServe <**> Opts.helper)
+         (Opts.progDesc "Serve an overview page over http")
+       )
+    <> Opts.command "filesystem" (Opts.info
+         (fsParser <**> Opts.helper)
+         (Opts.progDesc "Print all filesystems")
+       )
+    <> Opts.command "fs" (Opts.info
+         (fsParser <**> Opts.helper)
+         (Opts.progDesc "Alias for 'filesystem'")
+       )
+    <> Opts.command "disk" (Opts.info
+         (pure CmdDisk <**> Opts.helper)
+         (Opts.progDesc "Print all disks")
+       )
+    <> Opts.command "debug" (Opts.info
+         (pure CmdDebug <**> Opts.helper)
+         (Opts.progDesc "Debug-print the catalog")
+       )
     )
 
 main :: IO ()
@@ -522,9 +546,9 @@ main =
       CmdServe ->
         putStrLn "not implemented"
 
-      CmdFilesystem ->
+      CmdFilesystem verbosity ->
         printTreesWithBlankLine $ fmap
-          (displayFilesystemAsTree catalog)
+          (displayFilesystemAsTree verbosity catalog)
           (catalogFilesystems $ validCatalog $ catalog)
 
       CmdDisk ->
