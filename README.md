@@ -74,9 +74,9 @@ too large for the readme.)
 
 ## Building
 
-With [Nix](https://nixos.org/) 2.3:
+With [Nix](https://nixos.org/) 2.14 or later:
 
-    $ nix run --command make
+    $ nix develop --command make
     $ export LOCALE_ARCHIVE=/nix/store/4ahmilj13ppkfqsad42k9bjf6fafr7km-glibc-locales-2.30/lib/locale/locale-archive
     $ src/diskctl --help
 
